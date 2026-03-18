@@ -13,23 +13,36 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   static const textColor = Color(0xFFFFFFFD);
 
   double currentTemp = 27;
+  double setTemp = 26;
+  String acStatus = "IDLE";
   late MQTTService mqttService;
 
   bool _turnOn = true;
+
+  void updateLogic() {
+    double diff = (currentTemp - setTemp);
+
+    if (diff.abs() <= 1) {
+      acStatus = "IDLE";
+    } else if (diff > 1){
+      acStatus = "Cooling ❄️";
+    } else {
+      acStatus = "Heating 🔥";
+    }
+  }
 
   @override
   void initState() {
     super.initState();
 
     mqttService = MQTTService();
-
+    mqttService.connect();
     mqttService.onTemperatureChanged = (temp) {
       setState(() {
         currentTemp = temp;
+        updateLogic();
       });
     };
-
-    mqttService.connect();
   }
 
   @override
@@ -63,15 +76,15 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: const [
                           Text(
-                            'Thermostat',
+                            'ThermoSmart',
                             style: TextStyle(
                               color: textColor,
-                              fontSize: 16,
+                              fontSize: 20,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
                           Text(
-                            'Living Room',
+                            'Kontes Room',
                             style: TextStyle(color: textColor, fontSize: 12),
                           ),
                           SizedBox(height: 5),
@@ -83,22 +96,14 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
                       children: [
                         InfoIcon(
                           icon: const Icon(
-                            Icons.beach_access,
+                            Icons.thermostat,
                             color: Color(0xFFA9A6AF),
-                            size: 16,
-                          ),
-                          text: '${currentTemp.toStringAsFixed(1)} C',
-                        ),
-                        const SizedBox(height: 5),
-                        InfoIcon(
-                          icon: const Icon(
-                            Icons.invert_colors,
-                            color: Color(0xFFA9A6AF),
-                            size: 16,
+                            size: 45,
                           ),
                           text:
-                              '${(currentTemp * 9 / 5 + 32).toStringAsFixed(1)} F',
+                              '${currentTemp.toStringAsFixed(1)} C is the current temperature.',
                         ),
+                        const SizedBox(height: 0),
                       ],
                     ),
                   ],
@@ -111,8 +116,8 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
                     radius: 150,
                     turnOn: _turnOn,
                     modeIcon: const Icon(
-                      Icons.ac_unit,
-                      color: Color(0xFF3CAEF4),
+                      Icons.loop,
+                      color: Color.fromARGB(255, 255, 255, 255),
                     ),
                     textStyle: const TextStyle(color: textColor, fontSize: 34),
                     minValue: 18,
@@ -120,10 +125,31 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
                     initialValue: 26,
                     onValueChanged: (value) {
                       print("Selected value: $value");
+                      setState(() {
+                        setTemp = value.toDouble();
+                        updateLogic();
+                      });
+                      mqttService.publishSetpoint(value.toDouble());
                     },
                   ),
                 ),
               ),
+              SizedBox(height: 20),
+
+              Text(
+                acStatus,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: acStatus == "IDLE"
+                      ? Color(0xFFA9A6AF)
+                      : Color(0xFF4EC4EC),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+
+              SizedBox(height: 20),
 
               Container(height: 1, color: Colors.white.withOpacity(0.2)),
 
