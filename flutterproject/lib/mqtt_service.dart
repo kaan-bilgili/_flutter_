@@ -18,7 +18,23 @@ class MQTTService {
 }
 
   Function(double)? onTemperatureChanged;
+<<<<<<< Updated upstream
 
+=======
+/*
+  void publishSetpoint(double value) {
+    if (!_isConnected) return;
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(value.toString());
+    client.publishMessage(
+      "thermosmart/setpoint",
+      MqttQos.atMostOnce,
+      builder.payload!,
+    );
+    print("SETPOINT GÖNDERİLDİ: $value");
+  }
+*/
+>>>>>>> Stashed changes
   Future<void> connect() async {
     client = MqttServerClient(
       '192.168.1.100', // RPI IP
