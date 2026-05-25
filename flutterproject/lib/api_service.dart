@@ -36,4 +36,26 @@ class ApiService {
       print('ApiService sendSetpoint error: $e');
     }
   }
+
+  Future<Map<String, double>> fetchWeekly() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/readings/weekly'))
+          .timeout(const Duration(seconds: 4));
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final List<dynamic> data = body['data'] as List<dynamic>;
+        return {
+          for (var r in data)
+            (r['day'] as String).substring(5): // "05-09" formatı
+                (r['avg_temp'] as num).toDouble()
+        };
+      }
+    } catch (e) {
+      print('ApiService fetchWeekly error: $e');
+    }
+    return {};
+  }
+
 }

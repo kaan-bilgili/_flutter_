@@ -15,6 +15,7 @@ class _GraphsPageState extends State<GraphsPage>
   late Animation<double> _animation;
 
   List<double> dynamicTemps = [];
+  Map<String, double> weeklyData = {};
   bool _isLoading = true;
 
   final List<double> hourlyTemps = [
@@ -23,8 +24,11 @@ class _GraphsPageState extends State<GraphsPage>
     27.0, 26.8, 26.5, 26.0, 25.5, 25.0, 24.8, 24.5,
   ];
 
-  final List<double> weeklyTemps = [23.5, 25.0, 26.5, 27.0, 24.0, 22.5, 25.5];
-  final List<String> weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  //final List<double> weeklyTemps = [23.5, 25.0, 26.5, 27.0, 24.0, 22.5, 25.5];
+  //final List<String> weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  List<double> get weeklyTemps => weeklyData.values.toList();
+  List<String> get weekDays => weeklyData.keys.toList();
 
   int _selectedTab = 0;
 
@@ -47,9 +51,11 @@ class _GraphsPageState extends State<GraphsPage>
 
   Future<void> _loadHistory() async {
     final history = await ApiService().fetchHistory(limit: 24);
+    final weekly = await ApiService().fetchWeekly();
     if (!mounted) return;
     setState(() {
       if (history.isNotEmpty) dynamicTemps = history;
+      if (weekly.isNotEmpty) weeklyData = weekly;
       _isLoading = false;
     });
     _animationController.forward();
@@ -69,7 +75,10 @@ class _GraphsPageState extends State<GraphsPage>
 
   @override
   Widget build(BuildContext context) {
-    final currentData = dynamicTemps.isEmpty ? hourlyTemps : dynamicTemps;
+    //final currentData = dynamicTemps.isEmpty ? hourlyTemps : dynamicTemps;
+    final currentData = _selectedTab == 0
+      ? (dynamicTemps.isEmpty ? hourlyTemps : dynamicTemps)
+      : (weeklyTemps.isEmpty ? hourlyTemps : weeklyTemps);
 
     final minTemp = currentData.reduce(min);
     final maxTemp = currentData.reduce(max);
