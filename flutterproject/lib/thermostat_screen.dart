@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'graphs_page.dart';
 import 'thermostat.dart';
 import 'mqtt_service.dart';
+import 'api_service.dart';
 
 class ThermostatScreen extends StatefulWidget {
   const ThermostatScreen({super.key});
@@ -11,19 +12,48 @@ class ThermostatScreen extends StatefulWidget {
 }
 
 class _ThermostatScreenState extends State<ThermostatScreen> {
-  static const _bg = Color(0xFF0F2027);
-  static const _surface = Color(0xFF142030);
-  static const _textPrimary = Color(0xFFFFFFFD);
-  static const _textMuted = Color(0xFF7A8FA0);
-  static const _border = Color(0xFF1E2E3A);
-  static const _accent = Color(0xFF3F5BFA);
-  static const _coolColor = Color(0xFF4EC4EC);
-  static const _heatColor = Color(0xFFFB923C);
+  static const _bg           = Color(0xFF0F2027);
+  static const _textPrimary  = Color(0xFFFFFFFD);
+  static const _textMuted    = Color(0xFF7A8FA0);
+  static const _accent       = Color(0xFF3F5BFA);
+  static const _coolColor    = Color(0xFF4EC4EC);
+  static const _heatColor    = Color(0xFFFB923C);
 
   double currentTemp = 27;
-  double setTemp = 26;
-  String acStatus = 'IDLE';
-  late MQTTService mqttService;
+  double currentHum  = 0;
+  double setTemp     = 26;
+  String acStatus    = 'IDLE';
+  bool   _isHeating  = false;
+
+  // Bağlantı durumları
+  bool _mqttConnected = false;
+  bool _apiConnected  = false;
+
+  late MQTTService _mqttService;
+  late ApiService  _apiService;
+
+  // ─── Durum rengi ──────────────────────────────────────────────────────────
+
+  Color get _statusColor {
+    if (acStatus == 'IDLE')    return _textMuted;
+    if (acStatus == 'Heating') return _heatColor;
+    return _coolColor;
+  }
+
+  String get _connectionLabel {
+    if (_mqttConnected && _apiConnected) return 'MQTT + API ✅';
+    if (_mqttConnected)                  return 'MQTT ✅  API ⏳';
+    if (_apiConnected)                   return 'API ✅  MQTT ⏳';
+    return 'Bağlanıyor…';
+  }
+
+  Color get _connectionColor {
+    if (_mqttConnected && _apiConnected) return const Color(0xFF2ECC71);
+    if (_mqttConnected || _apiConnected) return const Color(0xFFE67E22);
+    return const Color(0xFFE74C3C);
+  }
+
+  // ─── Logic ────────────────────────────────────────────────────────────────
 
   void _updateLogic() {
     final diff = currentTemp - setTemp;
@@ -36,18 +66,102 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
     }
   }
 
+  // ─── initState ────────────────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
-    mqttService = MQTTService();
-    mqttService.connect();
-    mqttService.onTemperatureChanged = (temp) {
+
+    _mqttService = MQTTService();
+    _apiService  = ApiService();
+
+    // ── MQTT ────────────────────────────────────────────────────────────────
+    _mqttService.onConnectionChanged = (connected) {
+      if (!mounted) return;
+      setState(() => _mqttConnected = connected);
+      if (connected) _showSnack('MQTT bağlandı ⚡', const Color(0xFF3B82F6));
+    };
+
+    // Real-time sıcaklık — MQTT öncelikli
+    _mqttService.onTemperatureChanged = (temp) {
+      if (!mounted) return;
       setState(() {
         currentTemp = temp;
         _updateLogic();
       });
     };
+
+    _mqttService.onHumidityChanged = (hum) {
+      if (!mounted) return;
+      setState(() => currentHum = hum);
+    };
+
+    // ESP32'den heating durumu gelince UI güncelle
+    _mqttService.onHeatingStateChanged = (state) {
+      if (!mounted) return;
+      setState(() => _isHeating = state == 'ON');
+    };
+
+    _mqttService.connect();
+
+    // ── API ─────────────────────────────────────────────────────────────────
+    // Yedek polling — MQTT kesilirse veri kaybı olmaz
+    _apiService.onReadingReceived = (temp, humidity) {
+      if (!mounted) return;
+      if (_mqttConnected) return; // MQTT varsa API verisini görmezden gel
+      setState(() {
+        currentTemp = temp;
+        currentHum  = humidity;
+        _updateLogic();
+        if (!_apiConnected) {
+          _apiConnected = true;
+          _showSnack('API bağlandı', const Color(0xFF2ECC71));
+        }
+      });
+    };
+    _apiService.startPolling(interval: const Duration(seconds: 10));
   }
+
+  // ─── dispose ──────────────────────────────────────────────────────────────
+
+  @override
+  void dispose() {
+    _apiService.stopPolling();
+    _apiService.onReadingReceived       = null;
+    _mqttService.onTemperatureChanged   = null;
+    _mqttService.onHumidityChanged      = null;
+    _mqttService.onHeatingStateChanged  = null;
+    _mqttService.onConnectionChanged    = null;
+    super.dispose();
+  }
+
+  // ─── Setpoint gönder — HİBRİT ─────────────────────────────────────────────
+
+  void _sendSetpoint(int value) {
+    final sp = value.toDouble();
+    setState(() {
+      setTemp = sp;
+      _updateLogic();
+    });
+    _mqttService.publishSetpoint(sp); // Anlık → ESP32
+    _apiService.sendSetpoint(sp);     // Kalıcı → veritabanı
+  }
+
+  // ─── Helper ───────────────────────────────────────────────────────────────
+
+  void _showSnack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -93,19 +207,51 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
+              children: [
+                const Text(
                   'ThermoSmart',
                   style: TextStyle(color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w500),
                 ),
-                Text(
+                // Bağlantı durumu göstergesi
+                Row(
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: _connectionColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _connectionLabel,
+                      style: TextStyle(color: _connectionColor, fontSize: 10),
+                    ),
+                  ],
+                ),
+                const Text(
                   'Kontes Room',
                   style: TextStyle(color: _textMuted, fontSize: 11),
                 ),
               ],
             ),
           ),
-          _TempBadge(temp: currentTemp),
+          // Sağ: sıcaklık + nem
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _TempBadge(temp: currentTemp),
+              if (currentHum > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(
+                    '💧 ${currentHum.toStringAsFixed(0)}%',
+                    style: const TextStyle(color: _textMuted, fontSize: 10),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -125,16 +271,10 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
             color: acStatus == 'IDLE' ? Colors.grey : Colors.green,
           ),
           textStyle: const TextStyle(color: _textPrimary, fontSize: 34),
-          minValue: 18,
-          maxValue: 38,
+          minValue: 15,
+          maxValue: 35,
           initialValue: 26,
-          onValueChanged: (value) {
-            setState(() {
-              setTemp = value.toDouble();
-              _updateLogic();
-            });
-            mqttService.publishSetpoint(value.toDouble());
-          },
+          onValueChanged: _sendSetpoint, // ← Hibrit gönderim
         ),
       ),
     );
@@ -143,18 +283,18 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   // ─── Status pill ──────────────────────────────────────────────────────────
 
   Widget _buildStatusPill() {
-    final isIdle = acStatus == 'IDLE';
+    final isIdle    = acStatus == 'IDLE';
     final isCooling = acStatus == 'Cooling';
-
-    final color = isIdle ? _textMuted : isCooling ? _coolColor : _heatColor;
-    final icon = isIdle
+    final color  = isIdle ? _textMuted : isCooling ? _coolColor : _heatColor;
+    final icon   = isIdle
         ? Icons.check_circle_outline_rounded
         : isCooling
             ? Icons.ac_unit_rounded
             : Icons.local_fire_department_rounded;
-    final label = isIdle ? 'IDLE' : isCooling ? 'Cooling' : 'Heating';
+    final label  = isIdle ? 'IDLE' : isCooling ? 'Cooling' : 'Heating';
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
         color: color.withOpacity(0.08),
@@ -189,7 +329,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
 
   Widget _buildModeCards() {
     final isCooling = acStatus == 'Cooling';
-    final isHeating = acStatus == 'Heating';
+    final isHeating = acStatus == 'Heating' || _isHeating;
 
     return Row(
       children: [
@@ -226,7 +366,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
             icon: Icons.power_settings_new_rounded,
             label: 'Power',
             isPrimary: false,
-            onTap: () {},
+            onTap: () => _mqttService.publishCommand('TOGGLE'),
           ),
         ),
         const SizedBox(width: 10),
@@ -238,7 +378,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => GraphsPage()),
+                MaterialPageRoute(builder: (_) => const GraphsPage()),
               );
             },
           ),
@@ -257,7 +397,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   }
 }
 
-// ─── Reusable Widgets ──────────────────────────────────────────────────────────
+// ─── Reusable Widgets ─────────────────────────────────────────────────────────
 
 class _CircleButton extends StatelessWidget {
   final Widget child;
@@ -266,8 +406,7 @@ class _CircleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 34,
-      height: 34,
+      width: 34, height: 34,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(color: const Color(0xFF1E2E3A)),
@@ -309,11 +448,11 @@ class _TempBadge extends StatelessWidget {
 
 class _ModeCard extends StatelessWidget {
   final IconData icon;
-  final Color iconColor;
-  final String label;
-  final String stateText;
-  final bool isActive;
-  final Color activeColor;
+  final Color    iconColor;
+  final String   label;
+  final String   stateText;
+  final bool     isActive;
+  final Color    activeColor;
 
   const _ModeCard({
     required this.icon,
@@ -349,8 +488,7 @@ class _ModeCard extends StatelessWidget {
           ),
           const Spacer(),
           Container(
-            width: 8,
-            height: 8,
+            width: 8, height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: isActive ? activeColor : Colors.white.withOpacity(0.15),
@@ -363,9 +501,9 @@ class _ModeCard extends StatelessWidget {
 }
 
 class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isPrimary;
+  final IconData  icon;
+  final String    label;
+  final bool      isPrimary;
   final VoidCallback onTap;
 
   const _ActionButton({
