@@ -4,58 +4,47 @@
 #include <DHT.h>
 #include <Preferences.h>
 
-// ===== DHT =====
-#define DHTPIN 4
-#define DHTTYPE DHT11
+#define DHTPIN    4
+#define DHTTYPE   DHT11
+#define LED_PIN   5
+#define RESET_PIN 0
 
-// ===== LED =====
-#define LED_PIN 5
-
-// ===== RESET BUTTON =====
-// Bu pine bağlı butona 3 saniye basılı tutulursa WiFi ayarları sıfırlanır
-#define RESET_PIN 0  // ESP32 üzerindeki BOOT butonu
-
-WiFiClient espClient;
+WiFiClient   espClient;
 PubSubClient client(espClient);
-DHT dht(DHTPIN, DHTTYPE);
-Preferences preferences;
+DHT          dht(DHTPIN, DHTTYPE);
+Preferences  preferences;
 
 char mqtt_server[40] = "192.168.1.100";
-int setpoint = 22;
+int  setpoint = 22;
 
-// MQTT callback
+unsigned long lastReadTime = 0;
+#define READ_INTERVAL 3000
+
 void callback(char *topic, byte *payload, unsigned int length)
 {
   String message = "";
-  for (int i = 0; i < length; i++)
-  {
+  for (unsigned int i = 0; i < length; i++)
     message += (char)payload[i];
-  }
-
-  Serial.print("Yeni setpoint: ");
-  Serial.println(message);
 
   int newSetpoint = message.toInt();
-  if (newSetpoint > 0)
-  {
+  if (newSetpoint >= 15 && newSetpoint <= 35) {
     setpoint = newSetpoint;
+    Serial.print("Yeni setpoint: ");
+    Serial.println(setpoint);
   }
 }
 
 void connectWiFi()
 {
   WiFiManager wifiManager;
-
   wifiManager.setConfigPortalTimeout(120);
 
   WiFiManagerParameter mqtt_param("mqtt", "MQTT Sunucu IP", mqtt_server, 40);
   wifiManager.addParameter(&mqtt_param);
 
   Serial.println("WiFi baglaniyor...");
-
-  if (!wifiManager.autoConnect("ThermoSmart-Setup", "thermosetup"))
-  {
-    Serial.println("WiFi baglanti basarisiz, yeniden baslatiliyor...");
+  if (!wifiManager.autoConnect("ThermoSmart-Setup", "thermosetup")) {
+    Serial.println("WiFi basarisiz, yeniden baslatiliyor...");
     delay(3000);
     ESP.restart();
   }
@@ -65,26 +54,18 @@ void connectWiFi()
   preferences.putString("mqtt_ip", mqtt_server);
   preferences.end();
 
-  Serial.println("WiFi BAGLANDI");
-  Serial.print("ESP IP: ");
+  Serial.print("WiFi BAGLANDI - IP: ");
   Serial.println(WiFi.localIP());
-  Serial.print("MQTT Sunucu: ");
-  Serial.println(mqtt_server);
 }
 
 void reconnect()
 {
-  while (!client.connected())
-  {
+  while (!client.connected()) {
     Serial.println("MQTT connect deneniyor...");
-    if (client.connect("ESP32TEST"))
-    {
-      Serial.println("MQTT CONNECT BASARILI");
+    if (client.connect("ESP32_ThermoSmart")) {
+      Serial.println("MQTT BAGLANDI");
       client.subscribe("thermosmart/setpoint");
-      Serial.println("Subscribed OK");
-    }
-    else
-    {
+    } else {
       Serial.print("MQTT FAIL: ");
       Serial.println(client.state());
       delay(3000);
@@ -96,19 +77,14 @@ void checkResetButton()
 {
   pinMode(RESET_PIN, INPUT_PULLUP);
   delay(100);
-
-  if (digitalRead(RESET_PIN) == LOW)
-  {
+  if (digitalRead(RESET_PIN) == LOW) {
     unsigned long pressStart = millis();
-    Serial.println("Reset butonu basili, 3 saniye bekle...");
-
-    while (digitalRead(RESET_PIN) == LOW)
-    {
-      if (millis() - pressStart >= 3000)
-      {
-        Serial.println("WiFi ayarlari sifirlanıyor...");
-        WiFiManager wifiManager;
-        wifiManager.resetSettings();
+    Serial.println("Reset butonu basili...");
+    while (digitalRead(RESET_PIN) == LOW) {
+      if (millis() - pressStart >= 3000) {
+        Serial.println("Sifirlanıyor...");
+        WiFiManager wm;
+        wm.resetSettings();
         preferences.begin("thermosmart", false);
         preferences.clear();
         preferences.end();
@@ -123,6 +99,7 @@ void setup()
 {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
 
   preferences.begin("thermosmart", true);
   String saved_mqtt = preferences.getString("mqtt_ip", "192.168.1.100");
@@ -130,10 +107,8 @@ void setup()
   saved_mqtt.toCharArray(mqtt_server, 40);
 
   checkResetButton();
-
   dht.begin();
   delay(2000);
-
   connectWiFi();
 
   client.setServer(mqtt_server, 1883);
@@ -142,47 +117,42 @@ void setup()
 
 void loop()
 {
-  if (WiFi.status() != WL_CONNECTED)
-  {
-    connectWiFi();
-  }
-
-  if (!client.connected())
-  {
-    reconnect();
-  }
-
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!client.connected()) reconnect();
   client.loop();
 
-  float temperature = dht.readTemperature();
+  unsigned long now = millis();
+  if (now - lastReadTime >= READ_INTERVAL) {
+    lastReadTime = now;
 
-  if (isnan(temperature))
-  {
-    Serial.println("DHT okuma hatasi");
-    delay(2000);
-    return;
+    float temperature = dht.readTemperature();
+    float humidity    = dht.readHumidity();
+
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("DHT okuma hatasi");
+      return;
+    }
+
+    char tempStr[8], humStr[8];
+    dtostrf(temperature, 1, 2, tempStr);
+    dtostrf(humidity,    1, 2, humStr);
+
+    // Her ikisini de publish et
+    client.publish("thermosmart/temperature", tempStr);
+    client.publish("thermosmart/humidity",    humStr);
+
+    Serial.print("Temp: "); Serial.print(tempStr);
+    Serial.print(" | Hum: "); Serial.print(humStr);
+    Serial.print(" | Setpoint: "); Serial.println(setpoint);
+
+    if (temperature < setpoint - 1) {
+      digitalWrite(LED_PIN, HIGH);
+      client.publish("thermosmart/heating", "ON");
+      Serial.println("Heating ON");
+    } else if (temperature > setpoint + 1) {
+      digitalWrite(LED_PIN, LOW);
+      client.publish("thermosmart/heating", "OFF");
+      Serial.println("Heating OFF");
+    }
   }
-
-  char tempString[8];
-  dtostrf(temperature, 1, 2, tempString);
-
-  client.publish("thermosmart/temperature", tempString);
-
-  Serial.print("Temp: ");
-  Serial.print(tempString);
-  Serial.print(" | Setpoint: ");
-  Serial.println(setpoint);
-
-  if (temperature < setpoint - 1)
-  {
-    digitalWrite(LED_PIN, HIGH);
-    Serial.println("Heating ON");
-  }
-  else if (temperature > setpoint + 1)
-  {
-    digitalWrite(LED_PIN, LOW);
-    Serial.println("Heating OFF");
-  }
-
-  delay(3000);
 }
