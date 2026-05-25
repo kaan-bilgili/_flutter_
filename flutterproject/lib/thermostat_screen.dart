@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'graphs_page.dart';
 import 'thermostat.dart';
-import 'mqtt_service.dart';
+import 'api_service.dart';
+
+const textColor = Color(0xFFFFFFFD);
 
 class ThermostatScreen extends StatefulWidget {
   const ThermostatScreen({super.key});
@@ -11,21 +13,16 @@ class ThermostatScreen extends StatefulWidget {
 }
 
 class _ThermostatScreenState extends State<ThermostatScreen> {
-  static const _bg = Color(0xFF0F2027);
-  static const _surface = Color(0xFF142030);
-  static const _textPrimary = Color(0xFFFFFFFD);
-  static const _textMuted = Color(0xFF7A8FA0);
-  static const _border = Color(0xFF1E2E3A);
-  static const _accent = Color(0xFF3F5BFA);
   static const _coolColor = Color(0xFF4EC4EC);
-  static const _heatColor = Color(0xFFFB923C);
 
   double currentTemp = 27;
   double setTemp = 26;
-  String acStatus = 'IDLE';
-  late MQTTService mqttService;
+  String acStatus = "IDLE";
+  bool _turnOn = false;
+  late ApiService apiService;
+  String _connectionStatus = 'Connecting…';
 
-  void _updateLogic() {
+  void updateLogic() {
     final diff = currentTemp - setTemp;
     if (diff.abs() <= 1) {
       acStatus = 'IDLE';
@@ -39,371 +36,200 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   @override
   void initState() {
     super.initState();
-    mqttService = MQTTService();
-    mqttService.connect();
-    mqttService.onTemperatureChanged = (temp) {
+
+    apiService = ApiService();
+    apiService.onReadingReceived = (temp, humidity) {
+      if (!mounted) return;
       setState(() {
         currentTemp = temp;
-        _updateLogic();
+        updateLogic();
+        if (_connectionStatus != 'Connected ✅') {
+          _connectionStatus = 'Connected ✅';
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('API connected successfully!'),
+              backgroundColor: Color(0xFF2ECC71),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
       });
     };
+    apiService.startPolling();
+  }
+
+  @override
+  void dispose() {
+    apiService.stopPolling();
+    apiService.onReadingReceived = null;
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildHeader(),
-            Expanded(
-              child: Column(
-                children: [
-                  _buildDialArea(),
-                  _buildStatusPill(),
-                  const SizedBox(height: 12),
-                  const Divider(color: Color(0xFF1A2A36), thickness: 0.5, height: 1),
-                  Expanded(child: _buildBottomArea()),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── Header ───────────────────────────────────────────────────────────────
-
-  Widget _buildHeader() {
-    return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFF1A2A36), width: 0.5)),
-      ),
-      child: Row(
-        children: [
-          _CircleButton(
-            child: const Icon(Icons.arrow_back_ios_new_rounded, color: _textPrimary, size: 16),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'ThermoSmart',
-                  style: TextStyle(color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w500),
-                ),
-                Text(
-                  'Kontes Room',
-                  style: TextStyle(color: _textMuted, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          _TempBadge(temp: currentTemp),
-        ],
-      ),
-    );
-  }
-
-  // ─── Dial ─────────────────────────────────────────────────────────────────
-
-  Widget _buildDialArea() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 10),
-      child: Center(
-        child: Thermostat(
-          radius: 145,
-          turnOn: true,
-          modeIcon: Icon(
-            Icons.loop_rounded,
-            color: acStatus == 'IDLE' ? Colors.grey : Colors.green,
-          ),
-          textStyle: const TextStyle(color: _textPrimary, fontSize: 34),
-          minValue: 18,
-          maxValue: 38,
-          initialValue: 26,
-          onValueChanged: (value) {
-            setState(() {
-              setTemp = value.toDouble();
-              _updateLogic();
-            });
-            mqttService.publishSetpoint(value.toDouble());
-          },
-        ),
-      ),
-    );
-  }
-
-  // ─── Status pill ──────────────────────────────────────────────────────────
-
-  Widget _buildStatusPill() {
-    final isIdle = acStatus == 'IDLE';
-    final isCooling = acStatus == 'Cooling';
-
-    final color = isIdle ? _textMuted : isCooling ? _coolColor : _heatColor;
-    final icon = isIdle
-        ? Icons.check_circle_outline_rounded
-        : isCooling
-            ? Icons.ac_unit_rounded
-            : Icons.local_fire_department_rounded;
-    final label = isIdle ? 'IDLE' : isCooling ? 'Cooling' : 'Heating';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 15),
-          const SizedBox(width: 5),
-          Text(label, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w500)),
-        ],
-      ),
-    );
-  }
-
-  // ─── Bottom area ──────────────────────────────────────────────────────────
-
-  Widget _buildBottomArea() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _buildModeCards(),
-          _buildActionButtons(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModeCards() {
-    final isCooling = acStatus == 'Cooling';
-    final isHeating = acStatus == 'Heating';
-
-    return Row(
-      children: [
-        Expanded(
-          child: _ModeCard(
-            icon: Icons.ac_unit_rounded,
-            iconColor: _coolColor,
-            label: 'Cooling',
-            stateText: isCooling ? 'Active' : 'Standby',
-            isActive: isCooling,
-            activeColor: _coolColor,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ModeCard(
-            icon: Icons.local_fire_department_rounded,
-            iconColor: _heatColor,
-            label: 'Heating',
-            stateText: isHeating ? 'Active' : 'Standby',
-            isActive: isHeating,
-            activeColor: _heatColor,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionButtons() {
-    return Row(
-      children: [
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.power_settings_new_rounded,
-            label: 'Power',
-            isPrimary: false,
-            onTap: () {},
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.bar_chart_rounded,
-            label: 'Graphs',
-            isPrimary: true,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => GraphsPage()),
-              );
-            },
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.settings_rounded,
-            label: 'Settings',
-            isPrimary: false,
-            onTap: () {},
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Reusable Widgets ──────────────────────────────────────────────────────────
-
-class _CircleButton extends StatelessWidget {
-  final Widget child;
-  const _CircleButton({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 34,
-      height: 34,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFF1E2E3A)),
-      ),
-      child: Center(child: child),
-    );
-  }
-}
-
-class _TempBadge extends StatelessWidget {
-  final double temp;
-  const _TempBadge({required this.temp});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.thermostat_rounded, color: Color(0xFF7A8FA0), size: 14),
-          const SizedBox(width: 4),
-          Text(
-            '${temp.toStringAsFixed(1)}°',
-            style: const TextStyle(color: Color(0xFF4EC4EC), fontSize: 13, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(width: 3),
-          const Text('current', style: TextStyle(color: Color(0xFF7A8FA0), fontSize: 10)),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModeCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String label;
-  final String stateText;
-  final bool isActive;
-  final Color activeColor;
-
-  const _ModeCard({
-    required this.icon,
-    required this.iconColor,
-    required this.label,
-    required this.stateText,
-    required this.isActive,
-    required this.activeColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isActive ? activeColor.withOpacity(0.08) : Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isActive ? activeColor.withOpacity(0.5) : Colors.white.withOpacity(0.08),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor, size: 20),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      body: Container(
+        decoration: const BoxDecoration(color: Color(0xFF0F2027)),
+        child: SafeArea(
+          child: Column(
             children: [
-              Text(label, style: const TextStyle(color: Color(0xFFFFFFFD), fontSize: 12, fontWeight: FontWeight.w500)),
-              Text(stateText, style: TextStyle(color: isActive ? iconColor : const Color(0xFF7A8FA0), fontSize: 10)),
+              SizedBox(
+                height: 70,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.keyboard_backspace, color: textColor),
+                    ),
+                    Container(
+                      width: 1,
+                      color: textColor,
+                      margin: const EdgeInsets.only(left: 10, right: 10),
+                    ),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ThermoSmart',
+                            style: TextStyle(
+                              color: textColor,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          Text(
+                            _connectionStatus,
+                            style: TextStyle(
+                              color: _connectionStatus == 'Connected ✅'
+                                  ? const Color(0xFF2ECC71)
+                                  : const Color(0xFFE67E22),
+                              fontSize: 10,
+                            ),
+                          ),
+                          const Text(
+                            'Kontes Room',
+                            style: TextStyle(color: textColor, fontSize: 12),
+                          ),
+                          const SizedBox(height: 5),
+                        ],
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        const Icon(Icons.thermostat, color: Color(0xFFA9A6AF), size: 45),
+                        Text(
+                          '${currentTemp.toStringAsFixed(1)} C',
+                          style: const TextStyle(color: _coolColor, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                child: Center(
+                  child: Thermostat(
+                    radius: 150,
+                    turnOn: _turnOn,
+                    modeIcon: const Icon(Icons.loop, color: Colors.white),
+                    textStyle: const TextStyle(color: textColor, fontSize: 34),
+                    minValue: 18,
+                    maxValue: 38,
+                    initialValue: 26,
+                    onValueChanged: (value) {
+                      setState(() {
+                        setTemp = value.toDouble();
+                        updateLogic();
+                      });
+                      apiService.sendSetpoint(value.toDouble());
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              Text(
+                acStatus,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: acStatus == "IDLE"
+                      ? const Color(0xFFA9A6AF)
+                      : const Color(0xFF4EC4EC),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              Container(height: 1, color: Colors.white.withOpacity(0.2)),
+
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 24),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _BottomButton(
+                      icon: Icon(
+                        Icons.ac_unit,
+                        color: _turnOn ? const Color(0xFF4EC4EC) : Colors.white,
+                      ),
+                      text: "Cooling",
+                      onTap: () {
+                        setState(() {
+                          _turnOn = !_turnOn;
+                        });
+                      },
+                    ),
+                    const _BottomButton(
+                      icon: Icon(Icons.invert_colors, color: Colors.white),
+                      text: "Fan",
+                    ),
+                    _BottomButton(
+                      icon: const Icon(Icons.bar_chart, color: Colors.white),
+                      text: "Graphs",
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const GraphsPage(),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          const Spacer(),
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isActive ? activeColor : Colors.white.withOpacity(0.15),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isPrimary;
-  final VoidCallback onTap;
+class _BottomButton extends StatelessWidget {
+  final Widget icon;
+  final String text;
+  final VoidCallback? onTap;
 
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.isPrimary,
-    required this.onTap,
-  });
+  const _BottomButton({required this.icon, required this.text, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    const accent = Color(0xFF3F5BFA);
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: isPrimary ? accent.withOpacity(0.1) : Colors.white.withOpacity(0.03),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isPrimary ? accent.withOpacity(0.5) : Colors.white.withOpacity(0.08),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: isPrimary ? const Color(0xFF7FA8FF) : Colors.white, size: 22),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: isPrimary ? const Color(0xFF7FA8FF) : const Color(0xFF7A8FA0),
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          icon,
+          const SizedBox(height: 6),
+          Text(text, style: const TextStyle(color: Color(0xFF7A8FA0), fontSize: 11)),
+        ],
       ),
     );
   }

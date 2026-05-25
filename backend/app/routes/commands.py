@@ -10,6 +10,18 @@ class CommandCreate(BaseModel):
     state: str
     triggered_by: str
 
+class SetpointCommand(BaseModel):
+    setpoint: float
+
+@router.post("/setpoint")
+def update_setpoint(command: SetpointCommand):
+    try:
+        # Here you can add logic to send this setpoint to your thermostat
+        print(f"New setpoint received: {command.setpoint}")
+        return {"message": "Setpoint updated", "setpoint": command.setpoint}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/")
 def create_command(command: CommandCreate):

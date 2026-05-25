@@ -2,7 +2,14 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 class MQTTService {
+  static final MQTTService _instance = MQTTService._internal();
+  factory MQTTService() => _instance;
+  MQTTService._internal();
+
   late MqttServerClient client;
+  bool _isConnected = false;
+
+  Function(double)? onTemperatureChanged;
 
   void publishSetpoint(double value) {
   final builder = MqttClientPayloadBuilder();
@@ -36,25 +43,23 @@ class MQTTService {
 */
 >>>>>>> Stashed changes
   Future<void> connect() async {
-    client = MqttServerClient(
-      '192.168.1.100', // RPI IP
-      'flutter_client',
-    );
+    if (_isConnected) return;
 
+    client = MqttServerClient('192.168.1.100', 'flutter_client');
     client.port = 1883;
     client.keepAlivePeriod = 20;
 
     final connMess = MqttConnectMessage()
         .withClientIdentifier('flutter_client')
         .startClean();
-
     client.connectionMessage = connMess;
 
     try {
       await client.connect();
+      _isConnected = true;
       print("MQTT CONNECTED ✅");
     } catch (e) {
-      print("MQTT ERROR ❌");
+      print("MQTT ERROR ❌: $e");
       client.disconnect();
       return;
     }
@@ -63,16 +68,11 @@ class MQTTService {
 
     client.updates!.listen((event) {
       final recMess = event[0].payload as MqttPublishMessage;
-
       final payload = MqttPublishPayload.bytesToStringAsString(
         recMess.payload.message,
       );
-
       print("TEMP GELDİ: $payload");
-
-      if (onTemperatureChanged != null) {
-        onTemperatureChanged!(double.parse(payload));
-      }
+      onTemperatureChanged?.call(double.parse(payload));
     });
   }
 }
