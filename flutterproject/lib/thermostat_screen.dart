@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'graphs_page.dart';
 import 'thermostat.dart';
 import 'api_service.dart';
+import 'mqtt_service.dart';
+
 
 const textColor = Color(0xFFFFFFFD);
 
@@ -19,7 +21,6 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   double setTemp = 26;
   String acStatus = "IDLE";
   bool _turnOn = false;
-  late ApiService apiService;
   String _connectionStatus = 'Connecting…';
 
   void updateLogic() {
@@ -37,8 +38,8 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
   void initState() {
     super.initState();
 
-    apiService = ApiService();
-    apiService.onReadingReceived = (temp, humidity) {
+    MQTTService().connect();
+    MQTTService().onTemperatureChanged = (temp) {
       if (!mounted) return;
       setState(() {
         currentTemp = temp;
@@ -47,7 +48,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
           _connectionStatus = 'Connected ✅';
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('API connected successfully!'),
+              content: Text('MQTT connected successfully!'),
               backgroundColor: Color(0xFF2ECC71),
               duration: Duration(seconds: 3),
             ),
@@ -55,13 +56,11 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
         }
       });
     };
-    apiService.startPolling();
   }
+
 
   @override
   void dispose() {
-    apiService.stopPolling();
-    apiService.onReadingReceived = null;
     super.dispose();
   }
 
@@ -145,7 +144,7 @@ class _ThermostatScreenState extends State<ThermostatScreen> {
                         setTemp = value.toDouble();
                         updateLogic();
                       });
-                      apiService.sendSetpoint(value.toDouble());
+                      ApiService().sendSetpoint(value.toDouble());
                     },
                   ),
                 ),

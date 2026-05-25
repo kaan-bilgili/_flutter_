@@ -14,7 +14,6 @@ class _GraphsPageState extends State<GraphsPage>
   late AnimationController _animationController;
   late Animation<double> _animation;
 
-  late ApiService apiService;
   List<double> dynamicTemps = [];
   bool _isLoading = true;
 
@@ -42,24 +41,12 @@ class _GraphsPageState extends State<GraphsPage>
       curve: Curves.easeOutCubic,
     );
 
-    apiService = ApiService();
-
-    // Canlı veri: polling
-    apiService.onReadingReceived = (temp, humidity) {
-      if (!mounted) return;
-      setState(() {
-        dynamicTemps.add(temp);
-        if (dynamicTemps.length > 24) dynamicTemps.removeAt(0);
-      });
-    };
-    apiService.startPolling();
-
-    // Geçmiş veri: sayfa açılınca çek
     _loadHistory();
   }
 
+
   Future<void> _loadHistory() async {
-    final history = await apiService.fetchHistory(limit: 24);
+    final history = await ApiService().fetchHistory(limit: 24);
     if (!mounted) return;
     setState(() {
       if (history.isNotEmpty) dynamicTemps = history;
@@ -68,10 +55,9 @@ class _GraphsPageState extends State<GraphsPage>
     _animationController.forward();
   }
 
+
   @override
   void dispose() {
-    apiService.stopPolling();
-    apiService.onReadingReceived = null;
     _animationController.dispose();
     super.dispose();
   }
